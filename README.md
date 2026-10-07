@@ -22,15 +22,22 @@ Both feed the same analysis → memory → query path.
 
 ## How to run
 
-**You need:** git and [Node.js 20+](https://nodejs.org). Everything else is downloaded on first run.
+**You need:** [Node.js 20+](https://nodejs.org). Everything else is downloaded on first run.
 
-Use three terminals in the repo folder:
+Open **three terminals** in the project folder and start them **in this order**:
 
-| | Windows | macOS / Linux |
-|---|---|---|
-| 1. Backend → http://localhost:8000/docs | `run-backend.cmd` | `bash run-backend.sh` |
-| 2. Portal → http://localhost:3000 | `cd portal`, then `npm install`, then `npm run dev` | same |
-| 3. Device (webcam) | `run-agent.cmd` | `bash run-agent.sh` |
+1. **Backend.** It's ready when it prints `Uvicorn running on http://127.0.0.1:8000`.
+   - Windows: `run-backend.cmd`
+   - macOS / Linux: `bash run-backend.sh`
+2. **Portal**, then open http://localhost:3000:
+   ```bash
+   cd portal
+   npm install
+   npm run dev
+   ```
+3. **Device** (webcam):
+   - Windows: `run-agent.cmd`
+   - macOS / Linux: `bash run-agent.sh`
 
 **What the launchers download automatically** (about 4 GB on first run, mostly the model):
 - [uv](https://docs.astral.sh/uv/), user-level with no admin or sudo. uv then installs Python 3.12 and every Python package into a local `.venv`.
@@ -66,7 +73,7 @@ To speed things up:
 - On a Mac, run `ollama ps` while it is busy. The PROCESSOR column should say `100% GPU`.
 - Use a smaller model: `ollama pull qwen3-vl:2b-instruct` and `VISION_MODEL=qwen3-vl:2b-instruct`. Roughly 2× faster, weaker on small objects.
 - Send smaller images: `VISION_IMAGE_MAX_SIDE=512` (default 640) or `VISION_MID_IMAGE_MAX_SIDE=256` (default 384).
-- Use a hosted endpoint to take the load off your machine entirely (see "Choosing a model" below).
+- Use a hosted model instead (no GPU needed): any OpenAI-compatible endpoint serving Qwen3-VL works. Set `VISION_BASE_URL`, `VISION_MODEL` and `VISION_API_KEY` in `.env` (created by the backend launcher from `.env.example`), and the launcher then skips installing Ollama.
 
 **macOS / Linux notes:**
 - **macOS:** the first webcam run asks for camera permission for your terminal. If you denied it, enable it in *System Settings → Privacy & Security → Camera*. Apple Silicon runs the model on the GPU (fast); Intel Macs use the CPU (slow).
@@ -85,16 +92,7 @@ cd portal && npm install && npm run dev          # portal
 ```
 </details>
 
-**Choosing a model.** All of these use the same code; only `.env` changes (the backend launcher creates `.env` from `.env.example`). With a non-Ollama endpoint, the launcher skips installing Ollama.
-
-| Setup | `.env` | When |
-|---|---|---|
-| Ollama `qwen3-vl:4b-instruct` (default) | as shipped | any machine; ~1.5 s per event on an RTX 4080, CPU works (much slower) |
-| Ollama `qwen3-vl:8b-instruct` | `VISION_MODEL=qwen3-vl:8b-instruct` | GPU with ≥ 8 GB VRAM, better spatial reasoning |
-| Hosted (OpenRouter, DashScope…) | `VISION_BASE_URL`, `VISION_MODEL=qwen/qwen3-vl-8b-instruct`, `VISION_API_KEY` | weak laptop, no local model |
-| vLLM (Linux + NVIDIA) | `VISION_BASE_URL=http://gpu:8000/v1`, `VISION_MODEL=Qwen/Qwen3-VL-8B-Instruct-FP8` | production-style GPU server |
-
-**Tests.** `uv run pytest` runs the detector state machine, JSON parsing, model-download progress and both pipelines end to end, using a fake model. CI (`.github/workflows/ci.yml`) runs the launchers on clean Windows, macOS and Linux machines, followed by an agent → backend smoke test and the portal build.
+**Tests.** `uv run pytest` runs unit and end-to-end tests with a fake model. CI runs the launchers on Windows, macOS and Linux.
 
 ---
 
@@ -105,7 +103,7 @@ cd portal && npm install && npm run dev          # portal
   - Keeps a bounded 90 s rolling buffer of JPEGs.
   - Runs a settle-based change detector.
   - Writes events to an on-disk **outbox**, which is drained in order with backoff and deleted on server confirmation.
-  - Sends a heartbeat with filter and RAM stats. The agent uses about 60 MB of RAM.
+  - Sends a heartbeat with filter and RAM stats. The agent used 60–150 MB of RAM in testing (2 GB budget).
 - **Shared detector** (`detection/`). The same code is used by the device and by server-side upload processing.
 - **Backend** (`backend/`, FastAPI + SQLite).
   - Observation ingest with validation.
@@ -118,7 +116,14 @@ cd portal && npm install && npm run dev          # portal
   - An "events → memories · ignored · being analysed" summary, and a collapsible list of **ignored events** with the model's reason.
   - An overview page asks across all sources.
 
-## Key decisions
+## Important assumptions
+
+- The camera is **mostly fixed**. Moving it is recorded as a "camera moved" memory with a new inventory, but a camera that is constantly moving would make every frame a change.
+- One model call per event is acceptable latency: seconds on a GPU, tens of seconds on CPU. Analysis is asynchronous, so capture never blocks.
+- Single user, local network, no authentication (POC).
+- Upload timestamps are anchored at upload time plus the video offset; the portal shows `mm:ss` for uploads.
+
+## Major technical and product decisions
 
 - **What is a memory?** **Anything that happens in the scene**:
   - people entering, leaving or doing something with an object
@@ -130,7 +135,7 @@ cd portal && npm install && npm run dev          # portal
 - **Event detection that adapts to the camera.** Each sample is compared with the last *keyframe* (the scene as last reported) and with the previous sample (motion). The noise floor is the median motion of recent quiet samples, so a person sitting in view or a noisy sensor counts as "still" and real actions stand out. What happens next:
   - The scene settles in a different state about 2 s after an action → **visual_change**, with a clean BEFORE/AFTER pair and no hand in the way.
   - Something happened but the scene ended as it was (a walk-through, an object waved and put back) → **activity**. The DURING frame shows the action.
-  - Activity that goes on → a checkpoint every 10 s.
+  - Activity that goes on → a checkpoint after 10 s, then less often (at most one per minute).
 
   Only noise-level blips are dropped on the device. The VLM decides what is worth remembering, and ignored events stay visible in the portal with the model's reason.
 - **Bounded latency over completeness for live devices.** The first real-webcam test on an M1 Pro produced about one event every 10 s, faster than the model could analyse them, so a backlog grew. Three fixes:
@@ -140,26 +145,15 @@ cd portal && npm install && npm run dev          # portal
 
   Calls are also cheaper: a 384 px DURING frame and capped answer length. Uploaded videos are never merged.
 - **Measured facts beat a small model's judgement.** In testing, the 4B VLM reliably missed whole-image changes and answered "no change" for lights off or a turned camera. So the detector measures them on the device: brightness before and after, and a whole-image shift (phase correlation, verified by checking that the shift explains the difference). The backend turns these into `lighting_change` / `camera_moved` memories, and a camera move triggers a fresh inventory of the new view.
-- **1 fps sampling instead of the 5 s in my initial sketch.** Diffing a 160 px grayscale frame costs almost nothing on 2 cores, and 5 s misses short actions.
+- **One frame per second.** Comparing a 160 px grayscale frame with the previous one costs almost nothing on 2 cores, so the device can look every second and doesn't miss short actions.
 - **The device never talks to the model.** It only says "potentially meaningful evidence here" over a tiny multipart protocol (`POST /observations`, `POST /devices/{id}/heartbeat`). An ESP32 could implement the same thing.
 - **Storage is a bounded cache.** Rolling buffer (90 s, JPEG), outbox capped at 1 GB with oldest-first eviction, evidence at 1280 px / q80. No raw video is kept on the device.
-- **OpenAI-compatible model API.** Ollama, vLLM and hosted Qwen are interchangeable, so reviewers don't need Docker or a big GPU.
-- **Instruct, not "thinking", Qwen3-VL.** I measured both on the same events. The default `qwen3-vl:4b` tag reasons before answering: about 4.5 s per event, 6–23 s per question, and frequent invalid JSON. `4b-instruct` gave the same quality at about 1.4 s per event and under 1 s per question. Token budgets stay generous so thinking variants still work if configured.
+- **OpenAI-compatible model API.** Ollama, vLLM and hosted Qwen are interchangeable, so the project runs without Docker or a big GPU.
 - **SQLite + FTS5, no vector DB.** Questions about objects are keyword-heavy; porter stemming handles "key/keys". The LLM handles the temporal reasoning ("most recent memory wins").
-- **No ffmpeg.** OpenCV wheels decode video on their own. Evidence is 2–3 JPEG keyframes rather than clips (cheaper to store and to send to the VLM).
-
-## Assumptions
-
-- The camera is **mostly fixed**. Moving it is recorded as a "camera moved" memory with a new inventory, but a camera that is constantly moving would make every frame a change.
-- One model call per event is acceptable latency: seconds on a GPU, tens of seconds on CPU. Analysis is asynchronous, so capture never blocks.
-- Single user, local network, no authentication (POC).
-- Upload timestamps are anchored at upload time plus the video offset; the portal shows `mm:ss` for uploads.
 
 ## What I'd do next
 
-- Short H.264 evidence clips for ambiguous events, and a per-region detection mask (ignore windows and TVs).
-- An object-level "last known location" table and an object timeline, with embeddings / hybrid search for fuzzy questions ("something to drink").
-- Use the detector's `peak_motion` and a lightweight on-device person detector to tag *who* did something.
-- Device auth (per-device keys), an evidence retention policy, and retry and visibility tools for failed analyses in the portal.
-- A native ESP32-CAM firmware speaking the same protocol (JPEG snapshots + on-chip frame diff).
-- Evaluation: a small labelled video set to tune thresholds and measure memory precision and recall.
+- **Notifications for events the user cares about.** The user describes a rule in plain language, for example *"Tell me if the dog enters the room"* or *"Tell me if the baby starts moving"*. They get an e-mail or a phone push notification when it happens. Each new memory is already a text description of what happened, so the same model can check it against the user's rules. No new detection pipeline is needed.
+- **Face recognition.** Recognise household members, so memories say *who* did something ("Anna took the keys") and rules can name people ("tell me when Anna comes home").
+  - As a security measure: notify the user straight away when an **unrecognised person** enters, with the evidence frames attached.
+- **Long-term vision:** ideally, a system like Sibyl in the anime *Psycho-Pass*, which detects a crime before it is even committed. That needs a huge amount of data from a unified surveillance system across a whole city or country, and the hardest part is defining "crime" correctly.
