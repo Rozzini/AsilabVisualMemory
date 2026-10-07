@@ -40,7 +40,14 @@ Use three terminals in the repo folder:
   - Linux: the official installer, which asks for sudo.
 - The **Qwen3-VL model** (3.3 GB), downloaded by the backend itself on first start. The portal sidebar shows the progress. Anything the device sees in the meantime is queued and analysed once the download finishes.
 
-Then put an object down, move it, take it away, and wait for the scene to be still for about 3 s. A memory appears in the portal under the device. Ask *"Where is my phone?"* on the device page.
+Then try things in front of the camera:
+- walk in and out
+- hold up an object
+- put something down, or move it
+- switch the light off and on
+- turn the camera
+
+Each becomes a memory under the device a few seconds after the scene calms down. Ask *"Where is my phone?"* or *"When did someone come in?"* on the device page.
 
 **No webcam?** Run `uv run python scripts/make_demo_video.py`. It writes `demo.mp4`, a synthetic scene where keys move from the desk to the shelf. Upload it in the portal, or replay it as a device with `run-agent --video demo.mp4`.
 
@@ -50,6 +57,11 @@ Then put an object down, move it, take it away, and wait for the scene to be sti
 - `--stats` logs RAM use and filter counters.
 - `--trigger` sets detection sensitivity.
 - `--device-id` and `--name` identify the device.
+
+**Memories arrive slowly?** The backend logs `Analysed visual_change (3 frame(s)) in X s` for every event, and the device page shows how many events are still being analysed.
+- On a Mac, run `ollama ps` while it is busy. The PROCESSOR column should say `100% GPU`.
+- Smaller images are faster: `VISION_IMAGE_MAX_SIDE=512` in `.env` (default 640).
+- A hosted endpoint takes the load off your machine entirely (see "Choosing a model" below).
 
 **macOS / Linux notes:**
 - **macOS:** the first webcam run asks for camera permission for your terminal. If you denied it, enable it in *System Settings → Privacy & Security → Camera*. Apple Silicon runs the model on the GPU (fast); Intel Macs use the CPU (slow).
@@ -97,13 +109,26 @@ cd portal && npm install && npm run dev          # portal
 - **Retrieval.** FTS5 keyword search scoped to a device, an upload or everything. The LLM then writes the answer from the timestamped memories and cites them. There is a template fallback if the model is down.
 - **Portal** (`portal/`, Next.js 16).
   - Sidebar with **Devices** (online status, memory count) and **Uploaded videos** (status and progress).
-  - Clicking one shows its **memory history**, with before/after thumbnails and an evidence viewer, plus an **Ask** box scoped to that source.
+  - Clicking one shows its **memory history**, with before/during/after thumbnails and an evidence viewer, plus an **Ask** box scoped to that source.
+  - An "events → memories · ignored · being analysed" summary, and a collapsible list of **ignored events** with the model's reason.
   - An overview page asks across all sources.
 
 ## Key decisions
 
-- **What is a memory?** A *state change* in the scene: an object added, removed or moved, and where it ended up. The first frame of every session is a **baseline inventory**, so "where is X?" works even for objects that never moved.
-- **Settle-based detection instead of naive frame diffs.** An event starts when the scene departs from the last stable state, and is closed only after the scene has been still for 3 samples. That gives the VLM a *clean* BEFORE/AFTER pair without the hand in the way. A person walking through and leaving produces nothing and is discarded on the device. Thresholds favour recall; the VLM decides what is meaningful (`is_meaningful=false` → dismissed, never a memory).
+- **What is a memory?** **Anything that happens in the scene**:
+  - people entering, leaving or doing something with an object
+  - objects added, removed or moved, and where they ended up
+  - lights switching on or off
+  - the camera being moved (followed by a fresh inventory of the new view)
+
+  The first frame of every session is a **baseline inventory**, so "where is X?" works even for objects that never moved. The model gets the previous memory as context and skips repeats ("person still sitting there").
+- **Event detection that adapts to the camera.** Each sample is compared with the last *keyframe* (the scene as last reported) and with the previous sample (motion). The noise floor is the median motion of recent quiet samples, so a person sitting in view or a noisy sensor counts as "still" and real actions stand out. What happens next:
+  - The scene settles in a different state about 2 s after an action → **visual_change**, with a clean BEFORE/AFTER pair and no hand in the way.
+  - Something happened but the scene ended as it was (a walk-through, an object waved and put back) → **activity**. The DURING frame shows the action.
+  - Activity that goes on → a checkpoint every 10 s.
+
+  Only noise-level blips are dropped on the device. The VLM decides what is worth remembering, and ignored events stay visible in the portal with the model's reason.
+- **Measured facts beat a small model's judgement.** In testing, the 4B VLM reliably missed whole-image changes and answered "no change" for lights off or a turned camera. So the detector measures them on the device: brightness before and after, and a whole-image shift (phase correlation, verified by checking that the shift explains the difference). The backend turns these into `lighting_change` / `camera_moved` memories, and a camera move triggers a fresh inventory of the new view.
 - **1 fps sampling instead of the 5 s in my initial sketch.** Diffing a 160 px grayscale frame costs almost nothing on 2 cores, and 5 s misses short actions.
 - **The device never talks to the model.** It only says "potentially meaningful evidence here" over a tiny multipart protocol (`POST /observations`, `POST /devices/{id}/heartbeat`). An ESP32 could implement the same thing.
 - **Storage is a bounded cache.** Rolling buffer (90 s, JPEG), outbox capped at 1 GB with oldest-first eviction, evidence at 1280 px / q80. No raw video is kept on the device.
@@ -114,7 +139,7 @@ cd portal && npm install && npm run dev          # portal
 
 ## Assumptions
 
-- The camera is **fixed**. A moving camera would make every frame a "change".
+- The camera is **mostly fixed**. Moving it is recorded as a "camera moved" memory with a new inventory, but a camera that is constantly moving would make every frame a change.
 - One model call per event is acceptable latency: seconds on a GPU, tens of seconds on CPU. Analysis is asynchronous, so capture never blocks.
 - Single user, local network, no authentication (POC).
 - Upload timestamps are anchored at upload time plus the video offset; the portal shows `mm:ss` for uploads.

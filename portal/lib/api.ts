@@ -1,4 +1,4 @@
-import type { Device, Health, Job, Memory, QueryResponse, QueryScope } from "@/types";
+import type { Device, Health, Job, Memory, Observation, QueryResponse, QueryScope } from "@/types";
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -30,6 +30,12 @@ export const api = {
     if (scope.device_id) q.set("device_id", scope.device_id);
     if (scope.job_id) q.set("job_id", scope.job_id);
     return request<Memory[]>(`/memories?${q}`);
+  },
+  ignored: (scope: QueryScope) => {
+    const q = new URLSearchParams({ status: "dismissed", limit: "100" });
+    if (scope.device_id) q.set("device_id", scope.device_id);
+    if (scope.job_id) q.set("job_id", scope.job_id);
+    return request<Observation[]>(`/observations?${q}`);
   },
   query: (query: string, scope: QueryScope = {}) =>
     request<QueryResponse>("/query", {

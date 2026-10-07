@@ -70,6 +70,26 @@ def _when(obs) -> str:
         return obs["timestamp"]
 
 
+def _previous_memory(obs) -> str | None:
+    """Latest memory from the same device / upload before this observation (context for the model)."""
+    with connect() as conn:
+        if obs["job_id"]:
+            row = conn.execute(
+                "SELECT summary, video_offset_s, timestamp FROM memories WHERE job_id = ? "
+                "AND video_offset_s < ? ORDER BY video_offset_s DESC LIMIT 1",
+                (obs["job_id"], obs["video_offset_s"] or 0),
+            ).fetchone()
+        elif obs["device_id"]:
+            row = conn.execute(
+                "SELECT summary, video_offset_s, timestamp FROM memories WHERE device_id = ? "
+                "AND timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+                (obs["device_id"], obs["timestamp"]),
+            ).fetchone()
+        else:
+            row = None
+    return f"({_when(row)}) {row['summary']}" if row else None
+
+
 def process(obs_id: str) -> None:
     # Imported lazily to avoid import cycles (observations → worker → memory → observations).
     from backend.services.jobs import maybe_complete
@@ -83,10 +103,12 @@ def process(obs_id: str) -> None:
         return
 
     frames = load_frames(obs_id, json.loads(obs["frames"]))
+    previous = _previous_memory(obs)
     result, error, unavailable = None, None, False
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            result = get_vision().analyze(obs["type"], frames, _when(obs))
+            scores = json.loads(obs["metadata"] or "{}").get("scores")
+            result = get_vision().analyze(obs["type"], frames, _when(obs), previous, scores)
             break
         except VisionUnavailable as exc:
             unavailable, error = True, str(exc)

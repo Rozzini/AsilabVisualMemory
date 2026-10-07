@@ -16,7 +16,13 @@ def jpeg(color=(120, 120, 120)) -> bytes:
 
 
 class FakeVision:
-    def analyze(self, obs_type, frames, when):
+    def __init__(self):
+        self.calls = []
+
+    def analyze(self, obs_type, frames, when, previous=None, scores=None):
+        self.calls.append({"type": obs_type, "previous": previous, "scores": scores})
+        if obs_type == "activity":
+            return VisionResult(is_meaningful=False, summary="Nothing new happened.")
         if obs_type == "baseline":
             return VisionResult(is_meaningful=True, event_type="baseline",
                                 summary="A desk with a phone and keys.",
@@ -73,6 +79,48 @@ def test_vision_result_normalises_sloppy_output():
     assert r.objects[0].action == "moved" and r.objects[0].location_before is None
 
 
+def test_measurement_hints_for_lighting_and_camera_moves():
+    from backend.services.vision import measurement_hints
+
+    assert "darker" in measurement_hints({"brightness_before": 0.5, "brightness_after": 0.15})
+    assert "brighter" in measurement_hints({"brightness_before": 0.15, "brightness_after": 0.5})
+    moved = measurement_hints({"brightness_before": 0.5, "brightness_after": 0.5,
+                               "view_shift": 0.34, "view_shift_explains": 0.9})
+    assert "camera itself was probably moved" in moved
+    assert measurement_hints({"brightness_before": 0.5, "brightness_after": 0.48, "view_shift": 0.0}) == ""
+    assert measurement_hints(None) == ""
+
+
+def test_measured_facts_override_a_dismissive_model(monkeypatch):
+    from backend.services.vision import VisionService
+
+    svc = VisionService()
+    calls = []
+
+    def fake_describe(obs_type, frames, when, previous=None, scores=None):
+        calls.append(obs_type)
+        if obs_type == "baseline":
+            return VisionResult(is_meaningful=True, summary="A wall with a poster.",
+                                objects=[{"name": "poster", "action": "present", "location_after": "on the wall"}])
+        return VisionResult(is_meaningful=False, summary="No change in the scene.")
+
+    monkeypatch.setattr(svc, "_describe", fake_describe)
+    frames = [("before.jpg", b""), ("after.jpg", b"")]
+
+    dark = svc.analyze("visual_change", frames, "now",
+                       scores={"brightness_before": 0.48, "brightness_after": 0.14, "view_shift": 0.0})
+    assert dark.is_meaningful and dark.event_type == "lighting_change" and "switched off" in dark.summary
+
+    moved = svc.analyze("visual_change", frames, "now", scores={
+        "brightness_before": 0.48, "brightness_after": 0.47, "view_shift": 0.34, "view_shift_explains": 1.0})
+    assert moved.event_type == "camera_moved" and "poster" in moved.summary
+    assert moved.objects[0].name == "poster" and calls[-1] == "baseline"  # inventory of the new view
+
+    nothing = svc.analyze("visual_change", frames, "now",
+                          scores={"brightness_before": 0.48, "brightness_after": 0.47, "view_shift": 0.0})
+    assert not nothing.is_meaningful
+
+
 def test_fts_query_drops_question_words():
     assert retrieval.build_fts_query("Where did I leave my keys?") == "keys"
     assert retrieval.build_fts_query("where is it?") is None
@@ -96,6 +144,22 @@ def test_device_observation_to_memory_to_answer(client):
     ans = client.post("/api/v1/query", json={"query": "Where did I leave my keys?", "device_id": "cam-1"}).json()
     assert ans["used_llm"] and "shelf" in ans["answer"]
     assert ans["memories"][0]["event_type"] == "object_moved"
+
+    # the model got the previous memory of this device as context
+    change_call = [c for c in vision._service.calls if c["type"] == "visual_change"][0]
+    assert "A desk with a phone and keys." in change_call["previous"]
+
+
+def test_dismissed_events_are_listed_with_reason(client):
+    obs_id = post_obs(client, "activity", "2026-10-07T12:40:00Z", ("before.jpg", "mid.jpg", "after.jpg"))
+    wait_for(lambda: client.get(f"/api/v1/observations/{obs_id}").json()["status"] == "dismissed")
+
+    ignored = client.get("/api/v1/observations", params={"device_id": "cam-1", "status": "dismissed"}).json()
+    assert ignored[0]["id"] == obs_id
+    assert ignored[0]["result"]["summary"] == "Nothing new happened."
+    assert len(ignored[0]["evidence"]) == 3
+    device = client.get("/api/v1/devices/cam-1").json()
+    assert device["dismissed_count"] == 1 and device["pending_count"] == 0
 
 
 def test_upload_pipeline_is_independent_of_devices(client, tmp_path):

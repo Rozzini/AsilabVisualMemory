@@ -15,6 +15,9 @@ DEVICE_SELECT = """
 SELECT d.*,
   (SELECT COUNT(*) FROM memories m WHERE m.device_id = d.id) AS memory_count,
   (SELECT COUNT(*) FROM observations o WHERE o.device_id = d.id) AS observation_count,
+  (SELECT COUNT(*) FROM observations o WHERE o.device_id = d.id AND o.status = 'pending') AS pending_count,
+  (SELECT COUNT(*) FROM observations o WHERE o.device_id = d.id AND o.status = 'dismissed') AS dismissed_count,
+  (SELECT COUNT(*) FROM observations o WHERE o.device_id = d.id AND o.status = 'failed') AS failed_count,
   (SELECT MAX(m.timestamp) FROM memories m WHERE m.device_id = d.id) AS last_memory_at
 FROM devices d
 """

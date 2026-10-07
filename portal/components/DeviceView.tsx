@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { dateTime, timeAgo } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import AskBox from "./AskBox";
+import IgnoredEvents from "./IgnoredEvents";
 import Timeline from "./Timeline";
 
 export default function DeviceView({ id }: { id: string }) {
@@ -26,11 +27,15 @@ export default function DeviceView({ id }: { id: string }) {
             <span>ID {d.id}</span>
             <span>Last seen {timeAgo(d.last_seen)}</span>
             <span>Registered {dateTime(d.created_at)}</span>
-            <span>{d.observation_count} observations sent</span>
-            <span>{d.memory_count} memories</span>
+            <span>
+              {d.observation_count} events → {d.memory_count} memories
+              {d.dismissed_count > 0 && ` · ${d.dismissed_count} ignored`}
+              {d.pending_count > 0 && ` · ${d.pending_count} being analysed`}
+              {d.failed_count > 0 && ` · ${d.failed_count} failed`}
+            </span>
             {d.stats && (
               <span title="device-side filtering: sampled frames vs events sent">
-                {d.stats.samples} frames sampled → {d.stats.emitted} events, {d.stats.discarded} discarded locally
+                device: {d.stats.samples} frames sampled, {d.stats.discarded} blips dropped locally
                 {d.stats.rss_mb ? ` · ${d.stats.rss_mb} MB RAM` : ""}
               </span>
             )}
@@ -44,6 +49,8 @@ export default function DeviceView({ id }: { id: string }) {
         <h2 className="mb-3 text-sm font-medium text-zinc-300">Memory history</h2>
         <Timeline memories={memories.data} empty="No memories from this device yet." />
       </section>
+
+      <IgnoredEvents scope={{ device_id: id }} count={d?.dismissed_count ?? 0} />
     </div>
   );
 }

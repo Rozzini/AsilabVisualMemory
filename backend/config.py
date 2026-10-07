@@ -16,7 +16,7 @@ class Settings:
     vision_model: str = os.getenv("VISION_MODEL", "qwen3-vl:4b-instruct")
     vision_api_key: str = os.getenv("VISION_API_KEY", "ollama")
     vision_timeout: float = float(os.getenv("VISION_TIMEOUT", "180"))
-    vision_image_max_side: int = int(os.getenv("VISION_IMAGE_MAX_SIDE", "768"))
+    vision_image_max_side: int = int(os.getenv("VISION_IMAGE_MAX_SIDE", "640"))
     cors_origins: tuple[str, ...] = tuple(
         o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()
     )

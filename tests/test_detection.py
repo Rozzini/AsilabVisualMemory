@@ -1,18 +1,18 @@
 import numpy as np
 
-from detection import ChangeDetector, DetectorConfig, FrameSampler, RollingBuffer, encode_jpeg
+from detection import ChangeDetector, FrameSampler, RollingBuffer, encode_jpeg
 
 RNG = np.random.default_rng(0)
 
 
-def scene(objects=(), noise=3):
+def scene(objects=(), noise=3, brightness=0):
     """640x480 gray room with optional filled rectangles (x, y, w, h, value)."""
     img = np.full((480, 640, 3), 120, np.uint8)
     img[300:, :] = 90  # "desk"
     for x, y, w, h, v in objects:
         img[y : y + h, x : x + w] = v
     jitter = RNG.integers(-noise, noise + 1, img.shape, dtype=np.int16)
-    return np.clip(img.astype(np.int16) + jitter, 0, 255).astype(np.uint8)
+    return np.clip(img.astype(np.int16) + jitter + brightness, 0, 255).astype(np.uint8)
 
 
 KEYS_ON_DESK = (100, 320, 60, 30, 230)
@@ -20,24 +20,39 @@ KEYS_ON_SHELF = (450, 120, 60, 30, 230)
 PERSON = (200, 50, 200, 430, 30)
 
 
-def run(frames, cfg=None):
+def seated(dx=0, dy=0):
+    """A person sitting in view, shifted by a few pixels (breathing, small movements)."""
+    return (220 + dx, 150 + dy, 160, 330, 40)
+
+
+def run(frames, cfg=None):  # cfg: optional DetectorConfig
     det = ChangeDetector(cfg)
     events = [e for t, f in enumerate(frames) if (e := det.process(float(t), f))]
     return det, events
 
 
+def types(events):
+    return [e.type for e in events]
+
+
 def test_first_frame_is_baseline():
     _, events = run([scene()])
-    assert [e.type for e in events] == ["baseline"]
+    assert types(events) == ["baseline"]
 
 
 def test_static_scene_emits_nothing_after_baseline():
     det, events = run([scene() for _ in range(30)])
-    assert [e.type for e in events] == ["baseline"]
+    assert types(events) == ["baseline"]
     assert det.stats.triggers == 0
 
 
-def test_object_moved_emits_one_event_after_settling():
+def test_seated_person_micro_movement_is_not_an_event():
+    frames = [scene([seated(*RNG.integers(-3, 4, 2))]) for _ in range(60)]
+    det, events = run(frames)
+    assert types(events) == ["baseline"]
+
+
+def test_object_moved_emits_change_shortly_after_motion_stops():
     frames = (
         [scene([KEYS_ON_DESK])] * 5
         + [scene([KEYS_ON_DESK, PERSON]), scene([KEYS_ON_SHELF, PERSON])]
@@ -49,29 +64,47 @@ def test_object_moved_emits_one_event_after_settling():
     ev = changes[0]
     assert ev.before_ts == 4.0  # last frame before the person appeared
     assert ev.peak_ts in (5.0, 6.0, 7.0)
-    assert ev.after_ts > 7.0
-    assert not ev.forced
+    assert ev.after_ts <= 7.0 + 2 + 1  # within settle_samples (+1) after motion stopped
 
 
-def test_walk_through_without_change_is_discarded():
+def test_walk_through_is_reported_as_activity():
     frames = (
         [scene([KEYS_ON_DESK])] * 5
         + [scene([KEYS_ON_DESK, PERSON])] * 2
         + [scene([KEYS_ON_DESK]) for _ in range(6)]
     )
     det, events = run(frames)
-    assert [e.type for e in events] == ["baseline"]
-    assert det.stats.discarded == 1
+    assert types(events) == ["baseline", "activity"]
+    ev = events[1]
+    assert ev.peak_ts in (5.0, 6.0, 7.0) and not ev.forced  # mid frame shows the person
 
 
-def test_continuous_activity_forces_emit():
-    cfg = DetectorConfig(max_event_seconds=10)
+def test_continuous_activity_is_checkpointed():
     frames = [scene()] + [
-        scene([(i * 20 % 500, 100, 120, 300, 30 + (i % 2) * 150)]) for i in range(1, 20)
+        scene([(i * 20 % 500, 100, 120, 300, 30 + (i % 2) * 150)]) for i in range(1, 25)
     ]
-    _, events = run(frames, cfg)
+    _, events = run(frames)
     forced = [e for e in events if e.forced]
-    assert forced and forced[0].end_ts - forced[0].start_ts >= 10
+    assert len(forced) == 2  # every 10 s while it goes on
+    assert all(e.type == "activity" and e.end_ts - e.start_ts >= 10 for e in forced)
+
+
+def test_light_switched_off_is_a_change_with_brightness_measured():
+    frames = [scene()] * 5 + [scene(brightness=-70) for _ in range(5)]
+    _, events = run(frames)
+    assert types(events) == ["baseline", "visual_change"]
+    s = events[1].scores
+    assert s["brightness_after"] < 0.6 * s["brightness_before"]
+    assert s["view_shift_explains"] < 0.6  # no "camera moved" hint for a lighting change
+
+
+def test_camera_turned_is_measured_as_view_shift():
+    base = scene([KEYS_ON_DESK, KEYS_ON_SHELF])
+    turned = np.full_like(base, 100)
+    turned[:, :460] = base[:, 180:]  # view panned by 180 px
+    _, events = run([base] * 5 + [turned] * 5)
+    s = events[1].scores
+    assert s["view_shift"] > 0.2 and s["view_shift_explains"] > 0.6
 
 
 def test_rolling_buffer_bounds_and_lookup():

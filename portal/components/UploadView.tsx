@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { dateTime, videoTime } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import AskBox from "./AskBox";
+import IgnoredEvents from "./IgnoredEvents";
 import JobStatusBadge from "./JobStatusBadge";
 import ProgressBar from "./ProgressBar";
 import Timeline from "./Timeline";
@@ -30,7 +31,8 @@ export default function UploadView({ id }: { id: string }) {
             <span>Uploaded {dateTime(j.created_at)}</span>
             {j.duration_s != null && <span>Duration {videoTime(j.duration_s)}</span>}
             <span>
-              {j.observations_total} candidate events → {j.memory_count} memories
+              {j.observations_total} events → {j.memory_count} memories
+              {j.dismissed_count > 0 && ` · ${j.dismissed_count} ignored`}
             </span>
             {j.stats && <span>{j.stats.samples} frames sampled, {j.stats.discarded} discarded by change detector</span>}
           </div>
@@ -65,6 +67,8 @@ export default function UploadView({ id }: { id: string }) {
           empty={running ? "Memories will appear here as events are analysed…" : "No memories were created from this video."}
         />
       </section>
+
+      {j && <IgnoredEvents scope={{ job_id: id }} count={j.dismissed_count} />}
     </div>
   );
 }

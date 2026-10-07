@@ -13,7 +13,6 @@ interface Props {
 }
 
 export default function MemoryCard({ memory: m, showSource = false, highlight = false, onOpen }: Props) {
-  const thumbs = m.evidence.filter((e) => e.name !== "mid");
   const when = m.source === "upload" && m.video_offset_s != null ? videoTime(m.video_offset_s) : dateTime(m.timestamp);
 
   return (
@@ -23,13 +22,13 @@ export default function MemoryCard({ memory: m, showSource = false, highlight = 
       }`}
     >
       <button onClick={() => onOpen(m)} className="flex shrink-0 gap-1" title="View evidence">
-        {thumbs.map((e) => (
+        {m.evidence.map((e) => (  // before / during / after
           // eslint-disable-next-line @next/next/no-img-element
           <img
             key={e.url}
             src={evidenceUrl(e.url)}
             alt={e.name}
-            className="h-20 w-28 rounded border border-zinc-800 object-cover hover:border-zinc-500"
+            className="h-16 w-24 rounded border border-zinc-800 object-cover hover:border-zinc-500"
           />
         ))}
       </button>

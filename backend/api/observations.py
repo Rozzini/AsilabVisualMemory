@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import ValidationError
 
 from backend.api.devices import touch_device
@@ -50,18 +51,43 @@ async def ingest_observation(metadata: str = Form(...), frames: list[UploadFile]
     return {"id": obs_id, "status": "pending"}
 
 
+def _to_dict(row) -> dict:
+    d = dict(row)
+    frames = json.loads(d.pop("frames"))
+    d["metadata"] = json.loads(d["metadata"] or "{}")
+    d["result"] = json.loads(d["result"]) if d["result"] else None
+    d["evidence"] = evidence_urls(d["id"], frames)
+    return d
+
+
+@router.get("")
+def list_observations(
+    device_id: str | None = None,
+    job_id: str | None = None,
+    status: Literal["pending", "processed", "dismissed", "failed"] | None = None,
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Raw observations, e.g. the events the model judged not worth remembering (status=dismissed)."""
+    where, params = ["1=1"], []
+    for col, val in (("device_id", device_id), ("job_id", job_id), ("status", status)):
+        if val:
+            where.append(f"{col} = ?")
+            params.append(val)
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM observations WHERE {' AND '.join(where)} ORDER BY timestamp DESC LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+    return [_to_dict(r) for r in rows]
+
+
 @router.get("/{obs_id}")
 def get_observation(obs_id: str):
     with connect() as conn:
         row = conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "Observation not found")
-    d = dict(row)
-    frames = json.loads(d.pop("frames"))
-    d["metadata"] = json.loads(d["metadata"] or "{}")
-    d["result"] = json.loads(d["result"]) if d["result"] else None
-    d["evidence"] = evidence_urls(obs_id, frames)
-    return d
+    return _to_dict(row)
 
 
 @router.post("/retry-failed")

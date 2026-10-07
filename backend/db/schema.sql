@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS observations (
     job_id          TEXT,
     timestamp       TEXT NOT NULL,
     video_offset_s  REAL,
-    type            TEXT NOT NULL,       -- baseline | visual_change
+    type            TEXT NOT NULL,       -- baseline | visual_change | activity
     frames          TEXT NOT NULL,       -- JSON list of file names in evidence/<id>/
     metadata        TEXT,                -- JSON from the producer (detector scores...)
     status          TEXT NOT NULL,       -- pending | processed | dismissed | failed

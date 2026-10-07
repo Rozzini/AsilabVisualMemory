@@ -20,7 +20,7 @@ class ObservationMetadata(BaseModel):
 
     device_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
     timestamp: datetime
-    observation_type: Literal["baseline", "visual_change"]
+    observation_type: Literal["baseline", "visual_change", "activity"]
     event_start: datetime | None = None
     event_end: datetime | None = None
     scores: dict = Field(default_factory=dict)

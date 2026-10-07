@@ -8,6 +8,9 @@ export interface Device {
   last_seen: string | null;
   memory_count: number;
   observation_count: number;
+  pending_count: number;
+  dismissed_count: number;
+  failed_count: number;
   last_memory_at: string | null;
   stats: Record<string, number> | null;
 }
@@ -23,6 +26,7 @@ export interface Job {
   observations_total: number;
   observations_done: number;
   memory_count: number;
+  dismissed_count: number;
   stats: Record<string, number> | null;
   error: string | null;
   created_at: string;
@@ -57,6 +61,21 @@ export interface Memory {
   location_before: string | null;
   location_after: string | null;
   confidence: number | null;
+  evidence: Evidence[];
+}
+
+/** A raw event sent for analysis (used to show the ones the model ignored, with its reason). */
+export interface Observation {
+  id: string;
+  source: "device" | "upload";
+  device_id: string | null;
+  job_id: string | null;
+  timestamp: string;
+  video_offset_s: number | null;
+  type: "baseline" | "visual_change" | "activity";
+  status: "pending" | "processed" | "dismissed" | "failed";
+  result: { summary: string } | null;
+  error: string | null;
   evidence: Evidence[];
 }
 

@@ -8,7 +8,8 @@ from backend.db.database import connect, utc_now
 JOB_SELECT = """
 SELECT j.*,
   (SELECT COUNT(*) FROM observations o WHERE o.job_id = j.id AND o.status != 'pending') AS observations_done,
-  (SELECT COUNT(*) FROM memories m WHERE m.job_id = j.id) AS memory_count
+  (SELECT COUNT(*) FROM memories m WHERE m.job_id = j.id) AS memory_count,
+  (SELECT COUNT(*) FROM observations o WHERE o.job_id = j.id AND o.status = 'dismissed') AS dismissed_count
 FROM jobs j
 """
 

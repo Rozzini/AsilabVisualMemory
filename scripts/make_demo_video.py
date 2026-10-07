@@ -28,8 +28,14 @@ def frame(keys_at: tuple[int, int], person: bool) -> np.ndarray:
     cv2.rectangle(img, (x + 22, y + 9), (x + 70, y + 15), (0, 200, 255), -1)
     cv2.rectangle(img, (x + 58, y + 15), (x + 63, y + 24), (0, 200, 255), -1)
     cv2.putText(img, "KEYS", (x, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2)
-    if person:
-        cv2.rectangle(img, (250, 40), (420, 480), (30, 30, 30), -1)
+    if person:  # simple silhouette: head, torso, arms, legs
+        dark = (40, 35, 30)
+        cv2.circle(img, (335, 85), 38, dark, -1)
+        cv2.rectangle(img, (285, 130), (385, 330), dark, -1)
+        cv2.line(img, (285, 150), (235, 300), dark, 22)
+        cv2.line(img, (385, 150), (440, 290), dark, 22)
+        cv2.line(img, (305, 330), (295, 480), dark, 30)
+        cv2.line(img, (365, 330), (375, 480), dark, 30)
     noise = rng.integers(-3, 4, img.shape, dtype=np.int16)  # sensor noise
     return np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
