@@ -7,8 +7,9 @@ compared with two references:
 * ``scene_delta`` – vs the last emitted keyframe (has the scene changed since?)
 
 An event starts when the scene departs from the last keyframe. It is closed when the
-scene has been still for ``settle_samples`` samples, or checkpointed every
-``checkpoint_seconds`` while activity continues. What gets emitted:
+scene has been still for ``settle_samples`` samples, or checkpointed while activity
+continues (after 10 s, then 20 s, 40 s... at most every 60 s). Small changes during
+which nothing moved (webcam auto-exposure drift) are dropped. What gets emitted:
 
 * ``baseline``      – the first frame (the server inventories the scene)
 * ``visual_change`` – the scene settled in a different state (object moved, light off,
@@ -56,10 +57,14 @@ class DetectorConfig:
     still_noise_factor: float = 2.5
     # peak motion needed to report an activity whose scene ended unchanged
     activity_ratio: float = 0.02
+    # a change this large is reported even if nothing visibly moved (e.g. dusk); smaller
+    # motionless changes are drift (webcam auto-exposure, slow light changes) and are dropped
+    drift_ratio: float = 0.1
     # consecutive still samples required to consider the scene settled
     settle_samples: int = 2
-    # emit a checkpoint at this interval while activity continues
+    # while activity continues, checkpoint after 10 s, then 20 s, 40 s... up to every 60 s
     checkpoint_seconds: float = 10.0
+    checkpoint_max_seconds: float = 60.0
     # number of recent quiet samples used for the noise floor, and its upper bound
     # (about the micro-movement of a person sitting in view)
     noise_window: int = 30
@@ -110,6 +115,7 @@ class ChangeDetector:
         self._peak_ts: float | None = None
         self._peak_motion = 0.0
         self._still = 0
+        self._checkpoint_interval = self.cfg.checkpoint_seconds
 
     # --- image helpers -------------------------------------------------------
 
@@ -170,26 +176,29 @@ class ChangeDetector:
             if delta > trigger_thr:
                 self.state = self.ACTIVE
                 self.stats.triggers += 1
+                self._checkpoint_interval = cfg.checkpoint_seconds
                 self._start_segment(self._prev_ts, ts, motion)
         else:
             if motion > self._peak_motion:
                 self._peak_ts, self._peak_motion = ts, motion
             self._still = self._still + 1 if motion < still_thr else 0
+            moved = self._peak_motion > activity_thr
 
             if self._still >= cfg.settle_samples:
-                if delta > change_thr:
+                if delta > change_thr and (moved or delta >= cfg.drift_ratio):
                     event = self._emit("visual_change", ts, delta, cur)
-                elif self._peak_motion > activity_thr:
+                elif moved:
                     event = self._emit("activity", ts, delta, cur)
-                else:
+                else:  # a blip, or drift: nothing moved and the change is small
                     self.stats.discarded += 1
                 self._reference = cur
                 self.state = self.IDLE
-            elif ts - self._segment_ts >= cfg.checkpoint_seconds:
-                if delta > change_thr or self._peak_motion > activity_thr:
+            elif ts - self._segment_ts >= self._checkpoint_interval:
+                if moved or delta >= cfg.drift_ratio:
                     event = self._emit("activity", ts, delta, cur, forced=True)
                     self._reference = cur
-                # activity goes on: the current frame starts the next segment
+                # activity goes on: the current frame starts the next, longer segment
+                self._checkpoint_interval = min(self._checkpoint_interval * 2, cfg.checkpoint_max_seconds)
                 self._start_segment(ts, ts, 0.0)
 
         self._prev, self._prev_ts = cur, ts

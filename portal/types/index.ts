@@ -11,6 +11,7 @@ export interface Device {
   pending_count: number;
   dismissed_count: number;
   failed_count: number;
+  merged_count: number;
   last_memory_at: string | null;
   stats: Record<string, number> | null;
 }
@@ -73,7 +74,7 @@ export interface Observation {
   timestamp: string;
   video_offset_s: number | null;
   type: "baseline" | "visual_change" | "activity";
-  status: "pending" | "processed" | "dismissed" | "failed";
+  status: "pending" | "processed" | "dismissed" | "failed" | "merged";
   result: { summary: string } | null;
   error: string | null;
   evidence: Evidence[];

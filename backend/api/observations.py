@@ -64,7 +64,7 @@ def _to_dict(row) -> dict:
 def list_observations(
     device_id: str | None = None,
     job_id: str | None = None,
-    status: Literal["pending", "processed", "dismissed", "failed"] | None = None,
+    status: Literal["pending", "processed", "dismissed", "failed", "merged"] | None = None,
     limit: int = Query(50, ge=1, le=500),
 ):
     """Raw observations, e.g. the events the model judged not worth remembering (status=dismissed)."""

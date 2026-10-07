@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 
 import cv2
@@ -18,9 +19,16 @@ def jpeg(color=(120, 120, 120)) -> bytes:
 class FakeVision:
     def __init__(self):
         self.calls = []
+        self.gate = threading.Event()  # cleared = the "model" is busy
+        self.gate.set()
 
-    def analyze(self, obs_type, frames, when, previous=None, scores=None):
-        self.calls.append({"type": obs_type, "previous": previous, "scores": scores})
+    def analyze(self, obs_type, frames, when, previous=None, scores=None, note=None):
+        self.calls.append({"type": obs_type, "previous": previous, "scores": scores, "note": note,
+                           "frames": [n for n, _ in frames]})
+        self.gate.wait(10)
+        if note:  # several queued events merged into one analysis
+            return VisionResult(is_meaningful=True, event_type="person_activity",
+                                summary="A person moved around the desk for a while.")
         if obs_type == "activity":
             return VisionResult(is_meaningful=False, summary="Nothing new happened.")
         if obs_type == "baseline":
@@ -57,8 +65,9 @@ def wait_for(fn, timeout=10):
     raise AssertionError("timed out")
 
 
-def post_obs(client, obs_type, ts, names=("after.jpg",)):
-    meta = {"device_id": "cam-1", "timestamp": ts, "observation_type": obs_type}
+def post_obs(client, obs_type, ts, names=("after.jpg",), device="cam-1", peak=0.1):
+    meta = {"device_id": device, "timestamp": ts, "observation_type": obs_type,
+            "scores": {"peak_motion": peak}}
     files = [("frames", (n, jpeg(), "image/jpeg")) for n in names]
     r = client.post("/api/v1/observations", data={"metadata": json.dumps(meta)}, files=files)
     assert r.status_code == 202, r.text
@@ -97,7 +106,7 @@ def test_measured_facts_override_a_dismissive_model(monkeypatch):
     svc = VisionService()
     calls = []
 
-    def fake_describe(obs_type, frames, when, previous=None, scores=None):
+    def fake_describe(obs_type, frames, when, previous=None, scores=None, note=None):
         calls.append(obs_type)
         if obs_type == "baseline":
             return VisionResult(is_meaningful=True, summary="A wall with a poster.",
@@ -160,6 +169,34 @@ def test_dismissed_events_are_listed_with_reason(client):
     assert len(ignored[0]["evidence"]) == 3
     device = client.get("/api/v1/devices/cam-1").json()
     assert device["dismissed_count"] == 1 and device["pending_count"] == 0
+
+
+def test_device_backlog_is_merged_into_one_analysis(client):
+    fake = vision._service
+    frames3 = ("before.jpg", "mid.jpg", "after.jpg")
+    fake.gate.clear()  # the model is busy with the first event...
+    first = post_obs(client, "visual_change", "2026-10-07T13:00:00Z", frames3, device="cam-busy")
+    wait_for(lambda: any(c["type"] == "visual_change" and c["note"] is None for c in fake.calls[-1:]))
+    # ...while four more events queue up
+    queued = [post_obs(client, "activity", f"2026-10-07T13:00:{10 * i}Z", frames3, device="cam-busy",
+                       peak=0.1 * i) for i in range(1, 5)]
+    calls_before = len(fake.calls)
+    fake.gate.set()
+
+    status = lambda oid: client.get(f"/api/v1/observations/{oid}").json()  # noqa: E731
+    wait_for(lambda: status(queued[-1])["status"] == "processed")
+    assert status(first)["status"] == "processed"
+    assert [status(o)["status"] for o in queued[:-1]] == ["merged"] * 3
+    assert status(queued[0])["result"]["merged_into"] == queued[-1]
+
+    merged_calls = fake.calls[calls_before:]
+    assert len(merged_calls) == 1 and "4 consecutive events" in merged_calls[0]["note"]
+    assert merged_calls[0]["frames"] == ["before.jpg", "mid.jpg", "after.jpg"]
+
+    mems = client.get("/api/v1/memories", params={"device_id": "cam-busy"}).json()
+    assert len(mems) == 2 and mems[0]["summary"] == "A person moved around the desk for a while."
+    device = client.get("/api/v1/devices/cam-busy").json()
+    assert device["merged_count"] == 3 and device["pending_count"] == 0
 
 
 def test_upload_pipeline_is_independent_of_devices(client, tmp_path):

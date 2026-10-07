@@ -79,14 +79,30 @@ def test_walk_through_is_reported_as_activity():
     assert ev.peak_ts in (5.0, 6.0, 7.0) and not ev.forced  # mid frame shows the person
 
 
-def test_continuous_activity_is_checkpointed():
+def test_continuous_activity_checkpoints_back_off():
     frames = [scene()] + [
-        scene([(i * 20 % 500, 100, 120, 300, 30 + (i % 2) * 150)]) for i in range(1, 25)
+        scene([(i * 20 % 500, 100, 120, 300, 30 + (i % 2) * 150)]) for i in range(1, 76)
     ]
     _, events = run(frames)
     forced = [e for e in events if e.forced]
-    assert len(forced) == 2  # every 10 s while it goes on
-    assert all(e.type == "activity" and e.end_ts - e.start_ts >= 10 for e in forced)
+    assert all(e.type == "activity" for e in forced)
+    # after 10 s, then 20 s, then 40 s: 3 checkpoints in 75 s instead of 7
+    assert [round(e.end_ts - e.start_ts) for e in forced] == [10, 20, 40]
+
+
+def test_small_motionless_drift_is_dropped():
+    # auto-exposure style: one region slowly brightens by 2 levels per second, nothing moves
+    frames = [scene([(300, 60, 120, 90, 120 + 2 * t)], noise=0) for t in range(40)]
+    det, events = run(frames)
+    assert types(events) == ["baseline"]
+    assert det.stats.discarded >= 1
+
+
+def test_large_slow_change_is_still_reported():
+    # dusk: the whole room slowly darkens, nothing moves
+    frames = [scene(noise=0, brightness=-2 * t) for t in range(40)]
+    _, events = run(frames)
+    assert "visual_change" in types(events)
 
 
 def test_light_switched_off_is_a_change_with_brightness_measured():

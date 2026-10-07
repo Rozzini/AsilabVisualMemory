@@ -59,9 +59,14 @@ Each becomes a memory under the device a few seconds after the scene calms down.
 - `--device-id` and `--name` identify the device.
 
 **Memories arrive slowly?** The backend logs `Analysed visual_change (3 frame(s)) in X s` for every event, and the device page shows how many events are still being analysed.
+
+When a live device produces events faster than the model can analyse them, the queued events are **merged** into one memory ("between 12:33 and 12:34 …"), so memories stay current instead of piling up. The device page shows how many were merged.
+
+To speed things up:
 - On a Mac, run `ollama ps` while it is busy. The PROCESSOR column should say `100% GPU`.
-- Smaller images are faster: `VISION_IMAGE_MAX_SIDE=512` in `.env` (default 640).
-- A hosted endpoint takes the load off your machine entirely (see "Choosing a model" below).
+- Use a smaller model: `ollama pull qwen3-vl:2b-instruct` and `VISION_MODEL=qwen3-vl:2b-instruct`. Roughly 2× faster, weaker on small objects.
+- Send smaller images: `VISION_IMAGE_MAX_SIDE=512` (default 640) or `VISION_MID_IMAGE_MAX_SIDE=256` (default 384).
+- Use a hosted endpoint to take the load off your machine entirely (see "Choosing a model" below).
 
 **macOS / Linux notes:**
 - **macOS:** the first webcam run asks for camera permission for your terminal. If you denied it, enable it in *System Settings → Privacy & Security → Camera*. Apple Silicon runs the model on the GPU (fast); Intel Macs use the CPU (slow).
@@ -128,6 +133,12 @@ cd portal && npm install && npm run dev          # portal
   - Activity that goes on → a checkpoint every 10 s.
 
   Only noise-level blips are dropped on the device. The VLM decides what is worth remembering, and ignored events stay visible in the portal with the model's reason.
+- **Bounded latency over completeness for live devices.** The first real-webcam test on an M1 Pro produced about one event every 10 s, faster than the model could analyse them, so a backlog grew. Three fixes:
+  - The device drops motionless drift (webcam auto-exposure).
+  - Checkpoints during long activity back off (10 → 20 → 40 → 60 s).
+  - When a backlog still forms, the server merges the queued run into one analysis (first BEFORE, busiest DURING, last AFTER).
+
+  Calls are also cheaper: a 384 px DURING frame and capped answer length. Uploaded videos are never merged.
 - **Measured facts beat a small model's judgement.** In testing, the 4B VLM reliably missed whole-image changes and answered "no change" for lights off or a turned camera. So the detector measures them on the device: brightness before and after, and a whole-image shift (phase correlation, verified by checking that the shift explains the difference). The backend turns these into `lighting_change` / `camera_moved` memories, and a camera move triggers a fresh inventory of the new view.
 - **1 fps sampling instead of the 5 s in my initial sketch.** Diffing a 160 px grayscale frame costs almost nothing on 2 cores, and 5 s misses short actions.
 - **The device never talks to the model.** It only says "potentially meaningful evidence here" over a tiny multipart protocol (`POST /observations`, `POST /devices/{id}/heartbeat`). An ESP32 could implement the same thing.

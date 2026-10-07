@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS observations (
     type            TEXT NOT NULL,       -- baseline | visual_change | activity
     frames          TEXT NOT NULL,       -- JSON list of file names in evidence/<id>/
     metadata        TEXT,                -- JSON from the producer (detector scores...)
-    status          TEXT NOT NULL,       -- pending | processed | dismissed | failed
+    status          TEXT NOT NULL,       -- pending | processed | dismissed | failed | merged
     attempts        INTEGER NOT NULL DEFAULT 0,
     result          TEXT,                -- raw vision result (JSON)
     error           TEXT,

@@ -17,6 +17,9 @@ class Settings:
     vision_api_key: str = os.getenv("VISION_API_KEY", "ollama")
     vision_timeout: float = float(os.getenv("VISION_TIMEOUT", "180"))
     vision_image_max_side: int = int(os.getenv("VISION_IMAGE_MAX_SIDE", "640"))
+    vision_mid_image_max_side: int = int(os.getenv("VISION_MID_IMAGE_MAX_SIDE", "384"))
+    # Cap on generated tokens per call; raise to ~2048 for "thinking" model variants.
+    vision_max_tokens: int = int(os.getenv("VISION_MAX_TOKENS", "600"))
     cors_origins: tuple[str, ...] = tuple(
         o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()
     )

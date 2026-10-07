@@ -55,5 +55,15 @@ def load_frames(obs_id: str, names: list[str]) -> list[tuple[str, bytes]]:
     return [(n, (folder / n).read_bytes()) for n in names if (folder / n).exists()]
 
 
+def replace_frames(conn, obs_id: str, frames: list[tuple[str, bytes]]) -> None:
+    """Make `frames` the evidence of an observation (used when several events are merged)."""
+    folder = settings.evidence_dir / obs_id
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, data in frames:
+        (folder / name).write_bytes(data)
+    conn.execute("UPDATE observations SET frames = ? WHERE id = ?",
+                 (json.dumps([n for n, _ in frames]), obs_id))
+
+
 def evidence_urls(obs_id: str, names: list[str]) -> list[dict]:
     return [{"name": n.removesuffix(".jpg"), "url": f"/api/v1/evidence/{obs_id}/{n}"} for n in names]

@@ -30,6 +30,7 @@ export default function DeviceView({ id }: { id: string }) {
             <span>
               {d.observation_count} events → {d.memory_count} memories
               {d.dismissed_count > 0 && ` · ${d.dismissed_count} ignored`}
+              {d.merged_count > 0 && ` · ${d.merged_count} merged (analysis was busy)`}
               {d.pending_count > 0 && ` · ${d.pending_count} being analysed`}
               {d.failed_count > 0 && ` · ${d.failed_count} failed`}
             </span>

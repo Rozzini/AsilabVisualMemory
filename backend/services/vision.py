@@ -103,7 +103,8 @@ SCHEMA_HINT = """Reply with JSON exactly in this shape:
   "summary": "one short sentence describing what happened",
   "objects": [{"name": "keys", "action": "moved" | "added" | "removed" | "present" | "held" | "used", "location_before": "on the desk" | null, "location_after": "on the shelf" | null}],
   "confidence": 0.0-1.0
-}"""
+}
+Keep it short: at most 5 objects, only the ones involved in what happened (for an inventory: the most notable ones, at most 8)."""
 
 CHANGE_PROMPT = """These frames come from a home camera.
 {frame_legend}
@@ -274,11 +275,13 @@ class VisionService:
         when: str,
         previous: str | None = None,
         scores: dict | None = None,
+        note: str | None = None,
     ) -> VisionResult:
         """`previous`: the latest memory from the same source, so the model can skip repeats.
-        `scores`: the detector's measurements (brightness, view shift) for this event."""
+        `scores`: the detector's measurements (brightness, view shift) for this event.
+        `note`: extra context, e.g. that several queued events were merged into this one."""
         started = time.monotonic()
-        result = self._describe(obs_type, frames, when, previous, scores)
+        result = self._describe(obs_type, frames, when, previous, scores, note)
 
         facts = measured_facts(scores)
         if obs_type != "baseline" and facts["camera_moved"]:
@@ -309,9 +312,11 @@ class VisionService:
         when: str,
         previous: str | None = None,
         scores: dict | None = None,
+        note: str | None = None,
     ) -> VisionResult:
         """One model call: what does the VLM see in these frames?"""
-        if obs_type == "baseline":
+        baseline = obs_type == "baseline"
+        if baseline:
             text = BASELINE_PROMPT.format(when=when)
         else:
             legend = "\n".join(
@@ -320,6 +325,8 @@ class VisionService:
             activity = obs_type == "activity"
             if activity:
                 legend += "\n" + ACTIVITY_NOTE
+            if note:
+                legend += "\n" + note
             prev = f"Previous memory from this camera: {previous}\n" if previous else ""
             text = CHANGE_PROMPT.format(
                 frame_legend=legend, when=when, previous=prev + measurement_hints(scores),
@@ -327,23 +334,24 @@ class VisionService:
             )
 
         content: list[dict] = [{"type": "text", "text": text + "\n" + SCHEMA_HINT}]
-        for _, data in frames:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": _to_data_url(data, settings.vision_image_max_side)},
-            })
+        for name, data in frames:
+            # DURING only has to show the action, so it is sent smaller (fewer image tokens).
+            max_side = settings.vision_mid_image_max_side if name == "mid.jpg" else settings.vision_image_max_side
+            content.append({"type": "image_url", "image_url": {"url": _to_data_url(data, max_side)}})
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
         ]
-        result = self._chat_json(messages, VisionResult)
-        if obs_type == "baseline":
+        # Output tokens are a large part of the latency on Apple Silicon / CPU: keep answers short.
+        max_tokens = max(settings.vision_max_tokens, 1024) if baseline else settings.vision_max_tokens
+        result = self._chat_json(messages, VisionResult, max_tokens)
+        if baseline:
             result.event_type = "baseline"
         return result
 
     def answer(self, question: str, memory_lines: list[str]) -> Answer:
         prompt = ANSWER_PROMPT.format(memories="\n".join(memory_lines), question=question)
-        return self._chat_json([{"role": "user", "content": prompt}], Answer)
+        return self._chat_json([{"role": "user", "content": prompt}], Answer, settings.vision_max_tokens)
 
 
 _service: VisionService | None = None
