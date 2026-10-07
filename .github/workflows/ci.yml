@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Runs the tester launchers on clean machines: they must install uv, Python and all
+  # dependencies by themselves. The vision model is not used here (no GPU, 3 GB download):
+  # an external, unreachable endpoint makes the launcher skip Ollama and observations stay pending.
+  launchers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      VISION_BASE_URL: http://127.0.0.1:9/v1
+      VISION_MODEL: ci
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start backend via launcher (installs uv + deps)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -Command "Start-Process cmd -ArgumentList '/c run-backend.cmd > backend.log 2>&1' -WindowStyle Hidden"
+          else
+            nohup bash run-backend.sh > backend.log 2>&1 &
+          fi
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 150); do
+            curl -sf http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          cat backend.log; exit 1
+
+      - name: Run device agent via launcher on a synthetic video
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run python scripts/make_demo_video.py demo.mp4
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmd //c "run-agent.cmd --video demo.mp4 --device-id ci-cam"
+          else
+            bash run-agent.sh --video demo.mp4 --device-id ci-cam
+          fi
+
+      - name: Observations reached the backend
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run python - <<'EOF'
+          import json, urllib.request
+          health = json.load(urllib.request.urlopen("http://localhost:8000/health"))
+          assert health["model"]["status"] == "external", health
+          device = json.load(urllib.request.urlopen("http://localhost:8000/api/v1/devices/ci-cam"))
+          assert device["observation_count"] >= 2, device
+          print("OK", device["id"], device["observation_count"], "observations")
+          EOF
+
+      - name: Tests
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run pytest -q
+
+      - name: Backend log
+        if: always()
+        run: cat backend.log || true
+
+  portal:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

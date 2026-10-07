@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Env
+.env
+
+# Runtime data
+storage/*
+!storage/.gitkeep
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Portal
+portal/node_modules/
+portal/.next/
+portal/next-env.d.ts
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Generated demo video
+/demo.mp4

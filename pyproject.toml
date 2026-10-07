@@ -1,0 +1,36 @@
+[project]
+name = "visual-memory"
+version = "0.1.0"
+description = "Visual Memory POC: camera device that turns visual changes into queryable memories"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # device + shared detection (kept minimal: this is what runs on the 2-core / 2 GB device)
+    "numpy>=1.26",
+    "opencv-python-headless>=4.10",
+    "httpx>=0.27",
+    "psutil>=7.2",
+    "python-dotenv>=1.0",
+    # server
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7",
+    "openai>=1.40",
+]
+
+[project.scripts]
+visual-memory-agent = "agent.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent", "backend", "detection"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
